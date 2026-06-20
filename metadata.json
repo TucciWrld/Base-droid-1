@@ -1,0 +1,6 @@
+{
+  "name": "Base Droid",
+  "description": "An immersive simulation of the custom Base Droid OS built on AOSP, featuring a high-performance cyber-inspired launcher, performance optimizer, security sandbox, developer tools terminal, package manager, and offline-compatible AI Assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
