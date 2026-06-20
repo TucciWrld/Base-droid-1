@@ -153,15 +153,46 @@ class BaseDroidViewModel : ViewModel() {
     private val _currentWallpaperIndex = MutableStateFlow(0) // Custom Wallpaper Backgrounds
     val currentWallpaperIndex: StateFlow<Int> = _currentWallpaperIndex.asStateFlow()
 
+    private val _brightnessLevel = MutableStateFlow(0.8f)
+    val brightnessLevel: StateFlow<Float> = _brightnessLevel.asStateFlow()
+
+    private val _volumeLevel = MutableStateFlow(0.5f)
+    val volumeLevel: StateFlow<Float> = _volumeLevel.asStateFlow()
+
+    // --- Android 15 Easter Egg 'Vanilla Space Lander' States ---
+    private val _isEasterEggOpen = MutableStateFlow(false)
+    val isEasterEggOpen: StateFlow<Boolean> = _isEasterEggOpen.asStateFlow()
+
+    private val _rocketX = MutableStateFlow(50f)
+    val rocketX: StateFlow<Float> = _rocketX.asStateFlow()
+
+    private val _rocketY = MutableStateFlow(15f)
+    val rocketY: StateFlow<Float> = _rocketY.asStateFlow()
+
+    private val _velX = MutableStateFlow(0f)
+    val velX: StateFlow<Float> = _velX.asStateFlow()
+
+    private val _velY = MutableStateFlow(0f)
+    val velY: StateFlow<Float> = _velY.asStateFlow()
+
+    private val _fuel = MutableStateFlow(100)
+    val fuel: StateFlow<Int> = _fuel.asStateFlow()
+
+    private val _landerStatus = MutableStateFlow("FLYING") // "FLYING", "LANDED", "CRASHED"
+    val landerStatus: StateFlow<String> = _landerStatus.asStateFlow()
+
+    private val _landPadX = MutableStateFlow(50f)
+    val landPadX: StateFlow<Float> = _landPadX.asStateFlow()
+
     val accentColors = listOf(
-        Color(0xFF00F0FF), // Cyber Cyan
-        Color(0xFFFF007F), // Synth Pink
-        Color(0xFF00FF66), // Electronic Emerald
-        Color(0xFFBD00FF), // Ultraviolet Purple
-        Color(0xFFFFB300)  // Golden Amber
+        Color(0xFFFFB300), // Android 15 Vanilla Gold (extracted value)
+        Color(0xFF7986CB), // Indigo Mineral Wash
+        Color(0xFFBA68C8), // Cosmic Lavender Nebula
+        Color(0xFF81C784), // Aurora Green Mint
+        Color(0xFF00E5FF)  // Carbon Cyber Teal
     )
 
-    val colorNames = listOf("Neon Cyan", "Synth Pink", "Vivid Emerald", "Electric Purple", "Cyber Amber")
+    val colorNames = listOf("Vanilla Gold", "Mineral Indigo", "Cosmic Lavender", "Aurora Green", "Carbon Cyber")
 
     // --- Malware Scanning ---
     private val _isScanningMalware = MutableStateFlow(false)
@@ -209,6 +240,18 @@ class BaseDroidViewModel : ViewModel() {
         setupInitialTerminal()
         setupInitialAIChat()
         startSensorsSimulation()
+        startEasterEggGameLoop()
+    }
+
+    private fun startEasterEggGameLoop() {
+        viewModelScope.launch {
+            while (true) {
+                delay(40) // ~25 fps game tick
+                if (_isEasterEggOpen.value) {
+                    runLanderPhysicsTick()
+                }
+            }
+        }
     }
 
     // --- Boot Animation Sequence ---
@@ -462,7 +505,73 @@ echo "Memory optimizations initialized. Delta recovered!"
     fun selectClockStyle(index: Int) { _clockStyleIndex.value = index }
     fun selectBootAnimation(index: Int) { _bootAnimationIndex.value = index }
     fun selectAlwaysOnDisplay(index: Int) { _alwaysOnDisplayIndex.value = index }
-    fun selectWallpaper(index: Int) { _currentWallpaperIndex.value = index }
+    fun selectWallpaper(index: Int) { 
+        _currentWallpaperIndex.value = index
+        // Extracts and designs the color palette dynamically based on wallpaper choice (Android 15 style)
+        selectAccentColor(index)
+        addTerminalSystemLog("Wallpaper generated Android 15 Dynamic Color style: ${colorNames[index]}.")
+    }
+
+    fun updateBrightness(level: Float) { _brightnessLevel.value = level.coerceIn(0f, 1f) }
+    fun updateVolume(level: Float) { _volumeLevel.value = level.coerceIn(0f, 1f) }
+
+    // --- Android 15 Easter Egg Rocket Space Lander Logic ---
+    fun toggleEasterEgg(open: Boolean) {
+        _isEasterEggOpen.value = open
+        if (open) {
+            resetRocketLander()
+        }
+    }
+
+    fun resetRocketLander() {
+        _rocketX.value = 50f
+        _rocketY.value = 15f
+        _velX.value = 0f
+        _velY.value = 0f
+        _fuel.value = 100
+        _landerStatus.value = "FLYING"
+        _landPadX.value = 20f + (Math.random() * 45f).toFloat() // random landing pad position
+    }
+
+    fun thrustRocket(dx: Float, dy: Float) {
+        if (_landerStatus.value != "FLYING") return
+        if (_fuel.value <= 0) return
+
+        _fuel.value = (_fuel.value - 2).coerceAtLeast(0)
+        _velX.value = (_velX.value + dx).coerceIn(-4f, 4f)
+        _velY.value = (_velY.value + dy).coerceIn(-4f, 4f)
+    }
+
+    private fun runLanderPhysicsTick() {
+        if (_landerStatus.value != "FLYING") return
+
+        // Space Gravity
+        _velY.value = _velY.value + 0.12f
+
+        val nextX = (_rocketX.value + _velX.value).coerceIn(0f, 100f)
+        val nextY = (_rocketY.value + _velY.value).coerceIn(0f, 100f)
+
+        _rocketX.value = nextX
+        _rocketY.value = nextY
+
+        // Collision Check at landscape ground level
+        if (nextY >= 82f) {
+            val padL = _landPadX.value
+            val padR = padL + 25f // Pad takes up 25% of landscape width
+
+            val landedOnPad = nextX >= padL && nextX <= padR
+            val speedY = Math.abs(_velY.value)
+            val speedX = Math.abs(_velX.value)
+
+            if (landedOnPad && speedY <= 1.5f && speedX <= 1.0f) {
+                _landerStatus.value = "LANDED"
+                addTerminalSystemLog("Space Lander Discovered! Android 15 Easter Egg complete.")
+            } else {
+                _landerStatus.value = "CRASHED"
+                addTerminalSystemLog("Space Lander Impact Crash at vertical velocity: ${String.format("%.2f", speedY)}")
+            }
+        }
+    }
 
     // --- Screen Navigation ---
     fun navigateTo(screen: Screen) {

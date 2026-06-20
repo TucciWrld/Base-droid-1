@@ -95,9 +95,55 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun BaseDroidRootApp(viewModel: BaseDroidViewModel) {
     val currentScreen by viewModel.currentScreen.collectAsState()
+    val isEasterEggOpen by viewModel.isEasterEggOpen.collectAsState()
     val isAodMode = remember { mutableStateOf(false) }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    // Android 15 Predictive Back gesture emulator states
+    var backGestureActive by remember { mutableStateOf(false) }
+    var backGestureTriggered by remember { mutableStateOf(false) }
+    var backDragX by remember { mutableStateOf(0f) }
+    var backDragY by remember { mutableStateOf(0f) }
+
+    val accentColorIndex by viewModel.accentColorIndex.collectAsState()
+    val activeAccent = viewModel.accentColors[accentColorIndex]
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(currentScreen) {
+                if (currentScreen == Screen.BOOT || currentScreen == Screen.DESKTOP) return@pointerInput
+                detectDragGestures(
+                    onDragStart = { startOffset ->
+                        if (startOffset.x < 130f) { // Touch inside left border
+                            backGestureActive = true
+                            backDragY = startOffset.y
+                            backDragX = 0f
+                            backGestureTriggered = false
+                        }
+                    },
+                    onDrag = { change, dragAmount ->
+                        if (backGestureActive) {
+                            change.consume()
+                            backDragX = (backDragX + dragAmount.x).coerceAtLeast(0f)
+                            backGestureTriggered = backDragX > 170f
+                        }
+                    },
+                    onDragEnd = {
+                        if (backGestureActive) {
+                            if (backGestureTriggered) {
+                                viewModel.navigateTo(Screen.DESKTOP) // Pop back home
+                            }
+                            backGestureActive = false
+                            backGestureTriggered = false
+                        }
+                    },
+                    onDragCancel = {
+                        backGestureActive = false
+                        backGestureTriggered = false
+                    }
+                )
+            }
+    ) {
         if (isAodMode.value) {
             AlwaysOnDisplayScreen(viewModel) {
                 isAodMode.value = false
@@ -105,9 +151,45 @@ fun BaseDroidRootApp(viewModel: BaseDroidViewModel) {
         } else {
             when (currentScreen) {
                 Screen.BOOT -> BootScreen(viewModel)
-                else -> MainDesktopEnvironment(viewModel) {
-                    isAodMode.value = true
+                else -> {
+                    MainDesktopEnvironment(viewModel) {
+                        isAodMode.value = true
+                    }
+                    if (isEasterEggOpen) {
+                        Android15EasterEggSpaceLanderScreen(viewModel)
+                    }
                 }
+            }
+        }
+
+        // Animated responsive side pill for dynamic Android 15 predictive back Chevron feedback
+        if (backGestureActive) {
+            val factorColor = if (backGestureTriggered) activeAccent else Color.White.copy(alpha = 0.22f)
+            Box(
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            x = (backDragX * 0.35f - 26.dp.toPx()).toInt().coerceAtMost(120),
+                            y = (backDragY - 32.dp.toPx()).toInt()
+                        )
+                    }
+                    .size(width = 50.dp + (backDragX * 0.12f).dp, height = 64.dp)
+                    .clip(RoundedCornerShape(topEnd = 32.dp, bottomEnd = 32.dp, topStart = 12.dp, bottomStart = 12.dp))
+                    .background(factorColor)
+                    .border(
+                        1.dp,
+                        if (backGestureTriggered) Color.White else activeAccent.copy(alpha = 0.5f),
+                        RoundedCornerShape(topEnd = 32.dp, bottomEnd = 32.dp, topStart = 12.dp, bottomStart = 12.dp)
+                    )
+                    .padding(end = 12.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ChevronLeft,
+                    contentDescription = "Predictive Back",
+                    tint = if (backGestureTriggered) Color.Black else Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
             }
         }
     }
@@ -452,57 +534,47 @@ fun MainDesktopEnvironment(viewModel: BaseDroidViewModel, onPowerLock: () -> Uni
 
     val accentColorIndex by viewModel.accentColorIndex.collectAsState()
     val activeAccent = viewModel.accentColors[accentColorIndex]
+    val wallpaperIndex by viewModel.currentWallpaperIndex.collectAsState()
 
-    Scaffold(
-        topBar = { DesktopTopBar(viewModel, onPowerLock) },
-        bottomBar = { DesktopBottomBar(viewModel) },
-        containerColor = CarbonDark,
-        modifier = Modifier
-            .fillMaxSize()
-            .drawBehind {
-                // Drawing dark electronic circuit backdrops
-                val gridStep = 45.dp.toPx()
-                var x = 0f
-                val strokeColor = GridLineColor.copy(alpha = 0.32f)
-                while (x < size.width) {
-                    drawLine(strokeColor, Offset(x, 0f), Offset(x, size.height), 1f)
-                    x += gridStep
-                }
-                var y = 0f
-                while (y < size.height) {
-                    drawLine(strokeColor, Offset(0f, y), Offset(size.width, y), 1f)
-                    y += gridStep
-                }
-            }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            when (multitaskingMode) {
-                MultitaskingMode.STANDARD -> {
-                    // Render standard single panel
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        when (activeScreen) {
-                            Screen.DESKTOP -> DesktopWidgetLauncher(viewModel)
-                            Screen.APPS_LIST -> AppDrawerCategoryScreen(viewModel)
-                            Screen.SETTINGS -> CustomSettingsScreen(viewModel)
-                            Screen.TERMINAL -> TerminalShellScreen(viewModel)
-                            Screen.ASSISTANT -> AICompanionScreen(viewModel)
-                            Screen.STORE -> AppStoreRepositoryScreen(viewModel)
-                            Screen.FILES -> VirtualFilesWorkspaceScreen(viewModel)
-                            Screen.SECURITY -> SecuritySandboxScreen(viewModel)
-                            Screen.PERFORMANCE -> PerformanceOptimizerScreen(viewModel)
-                            else -> DesktopWidgetLauncher(viewModel)
+    Box(modifier = Modifier.fillMaxSize()) {
+        // High-fidelity Android 15 Wallpaper Backing Engine
+        WallpaperBacking(wallpaperIndex = wallpaperIndex, activeAccent = activeAccent)
+
+        Scaffold(
+            topBar = { DesktopTopBar(viewModel, onPowerLock) },
+            bottomBar = { DesktopBottomBar(viewModel) },
+            containerColor = Color.Transparent,
+            modifier = Modifier.fillMaxSize()
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                when (multitaskingMode) {
+                    MultitaskingMode.STANDARD -> {
+                        // Render standard single panel
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            when (activeScreen) {
+                                Screen.DESKTOP -> DesktopWidgetLauncher(viewModel)
+                                Screen.APPS_LIST -> AppDrawerCategoryScreen(viewModel)
+                                Screen.SETTINGS -> CustomSettingsScreen(viewModel)
+                                Screen.TERMINAL -> TerminalShellScreen(viewModel)
+                                Screen.ASSISTANT -> AICompanionScreen(viewModel)
+                                Screen.STORE -> AppStoreRepositoryScreen(viewModel)
+                                Screen.FILES -> VirtualFilesWorkspaceScreen(viewModel)
+                                Screen.SECURITY -> SecuritySandboxScreen(viewModel)
+                                Screen.PERFORMANCE -> PerformanceOptimizerScreen(viewModel)
+                                else -> DesktopWidgetLauncher(viewModel)
+                            }
                         }
                     }
-                }
-                MultitaskingMode.SPLIT_SCREEN -> {
-                    SplitScreenMultitaskingBody(viewModel)
-                }
-                MultitaskingMode.DESKTOP_MODE -> {
-                    DesktopFloatingWindowsManager(viewModel)
+                    MultitaskingMode.SPLIT_SCREEN -> {
+                        SplitScreenMultitaskingBody(viewModel)
+                    }
+                    MultitaskingMode.DESKTOP_MODE -> {
+                        DesktopFloatingWindowsManager(viewModel)
+                    }
                 }
             }
         }
@@ -795,22 +867,36 @@ fun DesktopWidgetLauncher(viewModel: BaseDroidViewModel) {
         // Welcome telemetry hero card banner
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface.copy(alpha = 0.85f)),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface.copy(alpha = 0.82f)),
             shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, activeAccent.copy(alpha = 0.35f))
+            border = BorderStroke(1.dp, activeAccent.copy(alpha = 0.45f))
         ) {
             Column(modifier = Modifier.padding(18.dp)) {
-                Text(
-                    text = "AOSP BASE DROID SUB-STATION",
-                    color = activeAccent,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.5.sp
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "ANDROID 15 OS UPGRADE READY",
+                        color = activeAccent,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.5.sp
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(activeAccent.copy(alpha = 0.15f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text("V15.0", color = activeAccent, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Secure Kernel Terminal Active",
+                    text = "Vanilla Ice Cream Core Active",
                     color = Color.White,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
@@ -818,11 +904,24 @@ fun DesktopWidgetLauncher(viewModel: BaseDroidViewModel) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Hardware Abstraction Engine: Qualcomm Elite Virtio. Refresh Rates synced at fluid 120Hz.",
+                    text = "System optimized with dynamic Material You accent palettes, cohesive glassmorphic controls, elastic navigation, and the authentic space-themed gravity lander easter egg.",
                     color = Color.Gray,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontFamily = FontFamily.SansSerif
                 )
+                Spacer(modifier = Modifier.height(14.dp))
+                Button(
+                    onClick = { viewModel.toggleEasterEgg(true) },
+                    colors = ButtonDefaults.buttonColors(containerColor = activeAccent),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(imageVector = Icons.Default.Star, contentDescription = "Space Lander", tint = Color.Black, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("LAUNCH ANDROID 15 SPACE LANDER", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    }
+                }
             }
         }
 
@@ -969,9 +1068,9 @@ fun DesktopWidgetLauncher(viewModel: BaseDroidViewModel) {
         // Interactive Toggles widget section
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface.copy(alpha = 0.85f)),
             shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, GridLineColor.copy(alpha = 0.5f))
+            border = BorderStroke(1.dp, activeAccent.copy(alpha = 0.22f))
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
@@ -994,7 +1093,7 @@ fun DesktopWidgetLauncher(viewModel: BaseDroidViewModel) {
 
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
-                    modifier = Modifier.height(140.dp),
+                    modifier = Modifier.height(115.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -1014,7 +1113,7 @@ fun DesktopWidgetLauncher(viewModel: BaseDroidViewModel) {
                                         "Cast Scan" -> viewModel.toggleScreenCasting()
                                     }
                                 }
-                                .padding(10.dp),
+                                .padding(8.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1022,7 +1121,7 @@ fun DesktopWidgetLauncher(viewModel: BaseDroidViewModel) {
                                     imageVector = icon,
                                     contentDescription = label,
                                     tint = if (active) activeAccent else Color.White.copy(alpha = 0.6f),
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
@@ -1036,6 +1135,29 @@ fun DesktopWidgetLauncher(viewModel: BaseDroidViewModel) {
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                Divider(color = GridLineColor.copy(alpha = 0.25f), thickness = 1.dp)
+                Spacer(modifier = Modifier.height(14.dp))
+
+                val brightness by viewModel.brightnessLevel.collectAsState()
+                val volume by viewModel.volumeLevel.collectAsState()
+
+                Android15ThickSlider(
+                    label = "ANDROID 15 DISPLAY BRIGHTNESS",
+                    icon = Icons.Default.Star,
+                    value = brightness,
+                    onValueChange = { viewModel.updateBrightness(it) },
+                    activeColor = activeAccent
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Android15ThickSlider(
+                    label = "ANDROID 15 AUDIO RING VOLUME",
+                    icon = Icons.Default.Settings,
+                    value = volume,
+                    onValueChange = { viewModel.updateVolume(it) },
+                    activeColor = activeAccent
+                )
             }
         }
 
@@ -1995,6 +2117,85 @@ fun CustomSettingsScreen(viewModel: BaseDroidViewModel) {
             }
         }
 
+        // Android 15 Wallpaper Grid selection deck
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(DarkSurface)
+                .border(1.dp, GridLineColor.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                .padding(14.dp)
+        ) {
+            Column {
+                Text(
+                    text = "Android 15 Dynamic Color Wallpapers",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Selecting wallpapers dynamically extracts harmonious, system-wide Material 3 pastel accent colors.",
+                    color = Color.Gray,
+                    fontSize = 11.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                val wallpaperNames = listOf(
+                    "Vanilla Space Odyssey",
+                    "Indigo Mineral Aura",
+                    "Cosmic Lavender Bloom",
+                    "Aurora Green Spark",
+                    "Carbon Cyber-Grid"
+                )
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.height(180.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(5) { idx ->
+                        val isSelected = idx == currentWallpaperIndex
+                        val wallAccent = viewModel.accentColors[idx]
+                        Box(
+                            modifier = Modifier
+                                .height(80.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.Black.copy(alpha = 0.5f))
+                                .border(
+                                    width = if (isSelected) 2.dp else 1.dp,
+                                    color = if (isSelected) activeAccent else GridLineColor.copy(alpha = 0.4f),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .clickable { viewModel.selectWallpaper(idx) }
+                                .padding(8.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clip(CircleShape)
+                                        .background(wallAccent)
+                                )
+                                Text(
+                                    text = wallpaperNames[idx],
+                                    color = if (isSelected) Color.White else Color.Gray,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 2. Lock screen clocks preferences
         Box(
             modifier = Modifier
@@ -2464,6 +2665,402 @@ fun FloatingCardWindowWrapper(
             // Client Windows body content
             Box(modifier = Modifier.fillMaxSize()) {
                 content()
+            }
+        }
+    }
+}
+
+// ============================================
+// --- ANDROID 15 UPGRADE SUPPORT UTILS ---
+// ============================================
+
+@Composable
+fun WallpaperBacking(wallpaperIndex: Int, activeAccent: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.fillMaxSize()) {
+        // Shared fallback background depth
+        drawRect(Color(0xFF08080C))
+
+        when (wallpaperIndex) {
+            0 -> { // Vanilla Space Odyssey (Default)
+                // Solar ambient radial
+                drawCircle(
+                    color = Color(0xFFFFB300).copy(alpha = 0.07f),
+                    radius = size.width * 0.7f,
+                    center = Offset(size.width * 0.5f, size.height * 0.4f)
+                )
+                // Orbital Planet ring path lines
+                drawCircle(
+                    color = activeAccent.copy(alpha = 0.15f),
+                    radius = size.width * 0.35f,
+                    center = Offset(size.width * 0.5f, size.height * 0.4f),
+                    style = Stroke(width = 1.5.dp.toPx())
+                )
+                drawCircle(
+                    color = activeAccent.copy(alpha = 0.08f),
+                    radius = size.width * 0.55f,
+                    center = Offset(size.width * 0.5f, size.height * 0.4f),
+                    style = Stroke(width = 1.dp.toPx())
+                )
+                // Draw dynamic Vanilla Stars
+                drawCircle(Color.White.copy(alpha = 0.4f), 3f, Offset(size.width * 0.2f, size.height * 0.15f))
+                drawCircle(Color.White.copy(alpha = 0.6f), 5f, Offset(size.width * 0.85f, size.height * 0.25f))
+                drawCircle(activeAccent.copy(alpha = 0.5f), 4f, Offset(size.width * 0.75f, size.height * 0.6f))
+                drawCircle(Color.White.copy(alpha = 0.3f), 2f, Offset(size.width * 0.15f, size.height * 0.75f))
+            }
+            1 -> { // Indigo Mineral Aura
+                // Diagonal wave bands
+                drawLine(
+                    color = Color(0xFF7986CB).copy(alpha = 0.08f),
+                    start = Offset(0f, size.height * 0.3f),
+                    end = Offset(size.width, size.height * 0.1f),
+                    strokeWidth = 140f
+                )
+                drawLine(
+                    color = activeAccent.copy(alpha = 0.05f),
+                    start = Offset(0f, size.height * 0.6f),
+                    end = Offset(size.width, size.height * 0.45f),
+                    strokeWidth = 180f
+                )
+            }
+            2 -> { // Cosmic Lavender Bloom
+                // Nebula glow centers
+                drawCircle(
+                    color = Color(0xFFBA68C8).copy(alpha = 0.1f),
+                    radius = size.width * 0.45f,
+                    center = Offset(size.width * 0.8f, size.height * 0.15f)
+                )
+                drawCircle(
+                    color = activeAccent.copy(alpha = 0.08f),
+                    radius = size.width * 0.35f,
+                    center = Offset(size.width * 0.15f, size.height * 0.75f)
+                )
+            }
+            3 -> { // Aurora Green Spark
+                // Vertical wave streaks
+                drawLine(
+                    color = Color(0xFF81C784).copy(alpha = 0.06f),
+                    start = Offset(size.width * 0.3f, 0f),
+                    end = Offset(size.width * 0.45f, size.height),
+                    strokeWidth = 200f
+                )
+                drawLine(
+                    color = activeAccent.copy(alpha = 0.04f),
+                    start = Offset(size.width * 0.7f, 0f),
+                    end = Offset(size.width * 0.85f, size.height),
+                    strokeWidth = 240f
+                )
+            }
+            4 -> { // Carbon Cyber-Grid (Classic AOSP)
+                val gridStep = 45.dp.toPx()
+                var x = 0f
+                val strokeColor = activeAccent.copy(alpha = 0.15f)
+                while (x < size.width) {
+                    drawLine(strokeColor, Offset(x, 0f), Offset(x, size.height), 1.2f)
+                    x += gridStep
+                }
+                var y = 0f
+                while (y < size.height) {
+                    drawLine(strokeColor, Offset(0f, y), Offset(size.width, y), 1.2f)
+                    y += gridStep
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun Android15ThickSlider(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    activeColor: Color
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                color = Color.Gray,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "${Math.round(value * 100)} %",
+                color = activeColor,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(32.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.Black.copy(alpha = 0.45f))
+                .border(1.dp, activeColor.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
+                .pointerInput(value) {
+                    val widthPx = this.size.width.toFloat()
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        val delta = dragAmount.x / widthPx
+                        onValueChange((value + delta).coerceIn(0f, 1f))
+                    }
+                }
+        ) {
+            // Thick dynamic pill fill block
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(value)
+                    .background(activeColor.copy(alpha = 0.85f))
+                    .clip(RoundedCornerShape(16.dp))
+            )
+
+            // Dynamic Icons and Content overlay inside slider bar
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = if (value > 0.4f) Color.Black else Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun Android15EasterEggSpaceLanderScreen(viewModel: BaseDroidViewModel) {
+    val rocketX by viewModel.rocketX.collectAsState()
+    val rocketY by viewModel.rocketY.collectAsState()
+    val velX by viewModel.velX.collectAsState()
+    val velY by viewModel.velY.collectAsState()
+    val fuel by viewModel.fuel.collectAsState()
+    val status by viewModel.landerStatus.collectAsState()
+    val padX by viewModel.landPadX.collectAsState()
+
+    val accentColorIndex by viewModel.accentColorIndex.collectAsState()
+    val activeAccent = viewModel.accentColors[accentColorIndex]
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.95f))
+            .padding(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Header panel metrics
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(top = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "VANILLA SPACE LANDER",
+                        color = activeAccent,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Official Android 15 Easter Egg Simulation",
+                        color = Color.Gray,
+                        fontSize = 10.sp
+                    )
+                }
+                IconButton(
+                    onClick = { viewModel.toggleEasterEgg(false) },
+                    modifier = Modifier.background(Color.White.copy(alpha = 0.1f), CircleShape)
+                ) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = "Exit game", tint = Color.White)
+                }
+            }
+
+            // Screen graphics viewport container
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF060710))
+                    .border(1.5.dp, activeAccent.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    // Starfield
+                    for (i in 0..18) {
+                        val starX = (Math.sin(i.toDouble() + 5.1) * 0.5 + 0.5) * size.width
+                        val starY = (Math.cos(i.toDouble() * 2.4) * 0.5 + 0.5) * size.height
+                        drawCircle(Color.White.copy(alpha = 0.3f), radius = 2.5f, center = Offset(starX.toFloat(), starY.toFloat()))
+                    }
+
+                    // Orbital disk backdrop trace
+                    drawCircle(
+                        color = activeAccent.copy(alpha = 0.05f),
+                        radius = size.width * 0.2f,
+                        center = Offset(size.width * 0.8f, size.height * 0.25f)
+                    )
+
+                    // Draw landing green pad
+                    val padWidthPct = size.width * 0.25f
+                    val padLeftPx = size.width * (padX / 100f)
+                    drawRect(
+                        color = Color.Green,
+                        topLeft = Offset(padLeftPx, size.height * 0.82f),
+                        size = Size(padWidthPct, 6.dp.toPx())
+                    )
+                }
+
+                // Drag/offset rocket container using dynamic Constraints
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    val rocketOffsetDpX = ((rocketX / 100f) * maxWidth.value).dp - 20.dp
+                    val rocketOffsetDpY = ((rocketY / 100f) * maxHeight.value).dp - 24.dp
+
+                    Column(
+                        modifier = Modifier
+                            .offset(x = rocketOffsetDpX, y = rocketOffsetDpY)
+                            .size(40.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Flame spark under thrust
+                        if (fuel > 0 && status == "FLYING" && (Math.abs(velX) > 0.05f || Math.abs(velY) > 0.05f)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp, 12.dp)
+                                    .background(Color(0xFFFFB300), RoundedCornerShape(bottomStart = 4.dp, bottomEnd = 4.dp))
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Spaceship rocket",
+                            tint = if (status == "LANDED") Color.Green else if (status == "CRASHED") Color.Red else Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(modifier = Modifier.size(2.dp, 5.dp).background(Color.White))
+                            Box(modifier = Modifier.size(2.dp, 5.dp).background(Color.White))
+                        }
+                    }
+                }
+
+                // Top stats readings dashboard
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(12.dp)
+                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                ) {
+                    val verticalVelocityColor = if (Math.abs(velY) <= 1.5f) Color.Green else Color.Red
+                    Text(text = "VERTICAL-SPEED: ${String.format("%.2f", velY)}", color = verticalVelocityColor, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                    Text(text = "LATERAL-SPEED: ${String.format("%.2f", velX)}", color = if (Math.abs(velX) <= 1.0f) Color.Green else Color.Yellow, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                    Text(text = "ROCKET FUEL: $fuel %", color = if (fuel < 25) Color.Red else activeAccent, fontSize = 9.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    Text(text = "ALTITUDE: ${Math.round(82f - rocketY)} FT", color = Color.Gray, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                }
+
+                // Crash or success banner overlays
+                if (status != "FLYING") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.65f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier.padding(24.dp)
+                        ) {
+                            Text(
+                                text = if (status == "LANDED") "LANDING SUCCESSFUL!" else "MISSION CRASHED!",
+                                color = if (status == "LANDED") Color.Green else Color.Red,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = if (status == "LANDED") "Incredible! You landed successfully on the AOSP base." else "Speed too high! Ensure Y-velocity is below 1.5.",
+                                color = Color.White.copy(alpha = 0.7f),
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(horizontal = 14.dp)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(
+                                onClick = { viewModel.resetRocketLander() },
+                                colors = ButtonDefaults.buttonColors(containerColor = if (status == "LANDED") Color.Green else Color.Red)
+                            ) {
+                                Text("REDEPLOY LANDER", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Direct thrust handles
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IconButton(
+                        onClick = { viewModel.thrustRocket(-0.5f, 0f) },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(DarkSurface, CircleShape)
+                            .border(1.dp, activeAccent.copy(alpha = 0.3f), CircleShape)
+                    ) {
+                        Icon(imageVector = Icons.Default.ChevronLeft, contentDescription = "Tilt left", tint = Color.White)
+                    }
+                    IconButton(
+                        onClick = { viewModel.thrustRocket(0.5f, 0f) },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(DarkSurface, CircleShape)
+                            .border(1.dp, activeAccent.copy(alpha = 0.3f), CircleShape)
+                    ) {
+                        Icon(imageVector = Icons.Default.ChevronRight, contentDescription = "Tilt right", tint = Color.White)
+                    }
+                }
+
+                Button(
+                    onClick = { viewModel.thrustRocket(0f, -0.92f) },
+                    modifier = Modifier
+                        .height(48.dp)
+                        .weight(1f)
+                        .padding(horizontal = 10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = activeAccent),
+                    shape = RoundedCornerShape(24.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(imageVector = Icons.Default.PlayArrow, contentDescription = "Thruster boost", tint = Color.Black, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("ACTIVE ROCKET THRUST", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    }
+                }
             }
         }
     }
